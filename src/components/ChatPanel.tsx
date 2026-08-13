@@ -87,6 +87,16 @@ export default function ChatPanel({
   const [insightError, setInsightError] = useState("");
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // 输入框自动增高：内容多时撑高，最多 10 行后内部滚动不再扩张
+  const MAX_INPUT_HEIGHT = 220; // 约 10 行（text-sm 行高 20px + 上下 padding）
+  const resizeInput = (el: HTMLTextAreaElement) => {
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, MAX_INPUT_HEIGHT) + "px";
+    el.style.overflowY =
+      el.scrollHeight > MAX_INPUT_HEIGHT ? "auto" : "hidden";
+  };
 
   // 加载对话历史
   useEffect(() => {
@@ -113,6 +123,11 @@ export default function ChatPanel({
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, insight]);
+
+  // 输入内容变化（含语音识别填入）时自动增高输入框
+  useEffect(() => {
+    if (inputRef.current) resizeInput(inputRef.current);
+  }, [input]);
 
   const handleSend = async () => {
     const content = input.trim();
@@ -466,6 +481,7 @@ export default function ChatPanel({
           </button>
 
           <textarea
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -477,10 +493,10 @@ export default function ChatPanel({
             placeholder={
               listening
                 ? "正在听你说话，说完自动填入..."
-                : "写下或说出你的想法、疑问或质疑..."
+                : "写下你的想法、疑问或质疑..."
             }
             rows={1}
-            className="flex-1 min-w-0 resize-none border border-paper-300 rounded-xl px-3 py-2.5 text-base text-ink focus:outline-none focus:border-accent transition-colors font-sans bg-paper-50"
+            className="flex-1 min-w-0 resize-none border border-paper-300 rounded-xl px-3 py-2.5 text-sm text-ink focus:outline-none focus:border-accent transition-colors font-sans bg-paper-50 leading-5 overflow-y-hidden"
           />
           <button
             onClick={handleSend}

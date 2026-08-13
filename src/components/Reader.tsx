@@ -7,6 +7,7 @@ import ChatPanel from "@/components/ChatPanel";
 interface ChapterItem {
   title: string;
   text: string;
+  level?: number;
 }
 
 interface ReadingProgress {
@@ -51,6 +52,9 @@ export default function Reader({ bookId }: { bookId: string }) {
   const modeRef = useRef<ReadMode>("scroll");
   const ratioRef = useRef(0);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 是否真的产生过阅读行为（滚动/翻页），用于卸载时决定是否保存进度，
+  // 避免 dev 模式 StrictMode 挂载即卸载时把进度覆盖为 0
+  const hasReadRef = useRef(false);
 
   // 加载书籍数据
   useEffect(() => {
@@ -100,17 +104,23 @@ export default function Reader({ bookId }: { bookId: string }) {
   }, []);
 
   // 滚动模式下恢复到上次阅读位置
+  // 依赖 fontSize：字号从本地偏好恢复后重新对齐，避免内容高度变化导致位置漂移
   useEffect(() => {
     if (detail && mode === "scroll" && scrollRef.current) {
-      const target =
-        ratioRef.current * scrollRef.current.scrollHeight;
-      requestAnimationFrame(() => {
-        if (scrollRef.current) {
-          scrollRef.current.scrollTop = target;
+      const apply = () => {
+        const el = scrollRef.current;
+        if (!el) return;
+        const max = el.scrollHeight - el.clientHeight;
+        if (max > 0) {
+          el.scrollTop = ratioRef.current * max;
         }
-      });
+      };
+      // 先等首帧渲染完成，再等字体/布局稳定后二次对齐
+      requestAnimationFrame(apply);
+      const timer = setTimeout(apply, 100);
+      return () => clearTimeout(timer);
     }
-  }, [detail, mode]);
+  }, [detail, mode, fontSize]);
 
   // 保存进度（防抖）
   const scheduleSave = useCallback(
@@ -143,8 +153,11 @@ export default function Reader({ bookId }: { bookId: string }) {
   }, [pageIndex]);
 
   // 组件卸载时保存最后一次进度
+  // hasReadRef 守卫：dev 模式 StrictMode 会「挂载-卸载-再挂载」，
+  // 若没有真实阅读行为就发送会覆盖掉之前保存的进度
   useEffect(() => {
-    return () => {
+    const saveNow = () => {
+      if (!hasReadRef.current) return;
       if (saveTimer.current) clearTimeout(saveTimer.current);
       const body = JSON.stringify({
         bookId,
@@ -152,7 +165,16 @@ export default function Reader({ bookId }: { bookId: string }) {
         scrollRatio: ratioRef.current,
         pageIndex: pageIndexRef.current,
       });
-      navigator.sendBeacon?.("/api/progress", new Blob([body], { type: "application/json" }));
+      navigator.sendBeacon?.(
+        "/api/progress",
+        new Blob([body], { type: "application/json" })
+      );
+    };
+    // 刷新 / 关闭标签页时兜底保存
+    window.addEventListener("pagehide", saveNow);
+    return () => {
+      window.removeEventListener("pagehide", saveNow);
+      saveNow();
     };
   }, [bookId]);
 
@@ -191,6 +213,7 @@ export default function Reader({ bookId }: { bookId: string }) {
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    hasReadRef.current = true;
     const ratio =
       el.scrollHeight - el.clientHeight > 0
         ? el.scrollTop / (el.scrollHeight - el.clientHeight)
@@ -219,7 +242,9 @@ export default function Reader({ bookId }: { bookId: string }) {
           break;
         }
       }
+      hasReadRef.current = true;
       setPageIndex(idx);
+      ratioRef.current = pages.length > 1 ? idx / (pages.length - 1) : 0;
       scheduleSave({ mode: "page", page: idx });
     } else {
       chapterRefs.current[ci]?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -267,14 +292,18 @@ export default function Reader({ bookId }: { bookId: string }) {
   const prevPage = () => {
     if (pageIndex > 0) {
       const idx = pageIndex - 1;
+      hasReadRef.current = true;
       setPageIndex(idx);
+      ratioRef.current = pages.length > 1 ? idx / (pages.length - 1) : 0;
       scheduleSave({ mode: "page", page: idx });
     }
   };
   const nextPage = () => {
     if (pageIndex < pages.length - 1) {
       const idx = pageIndex + 1;
+      hasReadRef.current = true;
       setPageIndex(idx);
+      ratioRef.current = pages.length > 1 ? idx / (pages.length - 1) : 0;
       scheduleSave({ mode: "page", page: idx });
     }
   };
@@ -408,19 +437,29 @@ export default function Reader({ bookId }: { bookId: string }) {
             目录 · {detail.chapters.length} 章
           </div>
           <nav className="flex-1 overflow-y-auto py-2">
-            {detail.chapters.map((ch, ci) => (
-              <button
-                key={ci}
-                onClick={() => goChapter(ci)}
-                className={`block w-full text-left px-4 py-2 text-sm font-sans truncate transition-colors ${
-                  currentChapter === ci && mode === "scroll"
-                    ? "text-accent bg-accent/5 border-l-2 border-accent"
-                    : "text-ink-light hover:text-ink hover:bg-paper-100 border-l-2 border-transparent"
-                }`}
-              >
-                {ch.title}
-              </button>
-            ))}
+            {detail.chapters.map((ch, ci) => {
+              const level = ch.level ?? 1;
+              // 按层级缩进 + 字号区分：一级章节最突出，二级缩进，三级更缩进更小
+              const indent =
+                level >= 3
+                  ? "pl-12 text-xs"
+                  : level === 2
+                  ? "pl-8 text-[13px]"
+                  : "pl-4 text-sm font-medium";
+              return (
+                <button
+                  key={ci}
+                  onClick={() => goChapter(ci)}
+                  className={`block w-full text-left py-1.5 pr-3 font-sans truncate transition-colors border-l-2 ${indent} ${
+                    currentChapter === ci && mode === "scroll"
+                      ? "text-accent bg-accent/5 border-accent"
+                      : "text-ink-light hover:text-ink hover:bg-paper-100 border-transparent"
+                  }`}
+                >
+                  {ch.title}
+                </button>
+              );
+            })}
           </nav>
         </aside>
 
@@ -444,7 +483,14 @@ export default function Reader({ bookId }: { bookId: string }) {
                   >
                     <h2
                       className="font-serif text-ink font-bold mb-6"
-                      style={{ fontSize: fontSize + 6 }}
+                      style={{
+                        fontSize:
+                          (ch.level ?? 1) === 1
+                            ? fontSize + 6
+                            : (ch.level ?? 1) === 2
+                            ? fontSize + 3
+                            : fontSize,
+                      }}
                     >
                       {ch.title}
                     </h2>
@@ -474,7 +520,14 @@ export default function Reader({ bookId }: { bookId: string }) {
                   <>
                     <h2
                       className="font-serif text-ink font-bold mb-6"
-                      style={{ fontSize: fontSize + 6 }}
+                      style={{
+                        fontSize:
+                          (detail.chapters[currentPage.chapterIndex]?.level ?? 1) === 1
+                            ? fontSize + 6
+                            : (detail.chapters[currentPage.chapterIndex]?.level ?? 1) === 2
+                            ? fontSize + 3
+                            : fontSize,
+                      }}
                     >
                       {detail.chapters[currentPage.chapterIndex]?.title}
                     </h2>

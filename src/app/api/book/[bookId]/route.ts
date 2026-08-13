@@ -12,6 +12,7 @@ export const dynamic = "force-dynamic";
 interface ChapterItem {
   title: string;
   text: string;
+  level?: number;
 }
 
 // 书籍详情：元信息 + 章节内容（EPUB 按章节，PDF 整本为单章）+ 阅读进度

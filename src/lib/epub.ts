@@ -15,6 +15,8 @@ import path from "path";
 export interface EpubChapter {
   title: string;
   text: string;
+  /** 目录层级：1=章/大标题，2=节，3=小节。缺失时按 1 处理 */
+  level?: number;
 }
 
 // toc.ncx 中 navPoint 的最小结构
@@ -22,6 +24,12 @@ interface TocNavPoint {
   navLabel?: { text?: unknown };
   content?: { "@_src"?: unknown };
   navPoint?: unknown;
+}
+
+// 目录条目：标题 + 层级（navPoint 嵌套深度）
+interface TocEntry {
+  label: string;
+  level: number;
 }
 
 export interface EpubData {
@@ -139,9 +147,10 @@ export async function extractEpub(buffer: Buffer): Promise<EpubData> {
     }
   }
 
-  // 4.5 读取目录文件 toc.ncx（若有），构建 src → 章节标题映射
-  // 目录是章节标题的权威来源，比从章节 HTML 猜测更准确
-  const tocMap = new Map<string, string>();
+  // 4.5 读取目录文件 toc.ncx（若有），构建 src → 章节标题 + 层级映射
+  // 目录是章节标题的权威来源，比从章节 HTML 猜测更准确；
+  // navPoint 嵌套深度即层级（第1章 > 小节），保留层级供阅读器目录分层展示
+  const tocMap = new Map<string, TocEntry>();
   const tocId = packageData.spine?.["@_toc"];
   let tocHref = tocId ? manifestMap.get(tocId) : null;
   if (!tocHref) {
@@ -161,17 +170,21 @@ export async function extractEpub(buffer: Buffer): Promise<EpubData> {
     if (tocEntry) {
       try {
         const toc = xmlParser.parse(tocEntry.getData().toString("utf-8"));
-        const flattenToc = (points: unknown): void => {
+        const flattenToc = (points: unknown, level: number): void => {
           for (const point of asArray(points as TocNavPoint[])) {
             const label = extractDcValue(point.navLabel?.text);
             const src = point.content?.["@_src"];
             if (label && typeof src === "string") {
-              tocMap.set(src.split("#")[0], label);
+              const key = src.split("#")[0];
+              // 同一文件可能被父子 navPoint 重复引用，保留最浅层级（首次出现）
+              if (!tocMap.has(key)) {
+                tocMap.set(key, { label, level });
+              }
             }
-            if (point.navPoint) flattenToc(point.navPoint);
+            if (point.navPoint) flattenToc(point.navPoint, level + 1);
           }
         };
-        flattenToc(toc.ncx?.navMap?.navPoint);
+        flattenToc(toc.ncx?.navMap?.navPoint, 1);
       } catch (e) {
         console.warn("解析 toc.ncx 失败，回退到章节 HTML 提取标题:", e);
       }
@@ -212,7 +225,8 @@ export async function extractEpub(buffer: Buffer): Promise<EpubData> {
       const hrefKey = href.split("#")[0];
       const tocTitle = tocMap.get(hrefKey);
       chapters.push({
-        title: tocTitle || extractChapterTitle(html, chapters.length, text),
+        title: tocTitle?.label || extractChapterTitle(html, chapters.length, text),
+        level: tocTitle?.level ?? 1,
         text,
       });
     }
