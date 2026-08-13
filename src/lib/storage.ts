@@ -5,7 +5,7 @@
  * MVP 阶段使用本地文件系统存储。
  */
 
-import { readFile, writeFile, mkdir, readdir } from "fs/promises";
+import { readFile, writeFile, mkdir, readdir, unlink } from "fs/promises";
 import path from "path";
 import crypto from "crypto";
 
@@ -198,4 +198,28 @@ export async function listBooks(): Promise<BookShelfItem[]> {
   return books
     .filter((b): b is BookShelfItem => b !== null)
     .sort((a, b) => (a.lastReadAt < b.lastReadAt ? 1 : -1));
+}
+
+/**
+ * 删除一本书的所有关联文件（原书、文本、章节、进度、对话记录）。
+ */
+export async function deleteBook(bookId: string): Promise<void> {
+  const suffixes = [
+    "meta.json",
+    "txt",
+    "chapters.json",
+    "progress.json",
+    "conversation.json",
+    "pdf",
+    "epub",
+  ];
+  await Promise.all(
+    suffixes.map(async (ext) => {
+      try {
+        await unlink(path.join(UPLOAD_DIR, `${bookId}.${ext}`));
+      } catch {
+        // 文件不存在就跳过
+      }
+    })
+  );
 }
