@@ -7,6 +7,11 @@
 
 import OpenAI from "openai";
 
+// 默认模型：DeepSeek 官方已于 2026-07-24 停用 deepseek-chat，
+// 新模型为 deepseek-v4-flash（便宜、适合阅读对话）与 deepseek-v4-pro（更强）。
+// 可通过环境变量 DEEPSEEK_MODEL 覆盖。
+const DEFAULT_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
+
 // 延迟初始化客户端，避免在没有环境变量时启动报错
 let client: OpenAI | null = null;
 
@@ -50,7 +55,7 @@ export async function chat(
   const c = getClient();
 
   const response = await c.chat.completions.create({
-    model: options.model || "deepseek-chat",
+    model: options.model || DEFAULT_MODEL,
     messages,
     temperature: options.temperature ?? 0.7,
     max_tokens: options.maxTokens,
@@ -69,7 +74,7 @@ export async function* chatStream(
   const c = getClient();
 
   const stream = await c.chat.completions.create({
-    model: options.model || "deepseek-chat",
+    model: options.model || DEFAULT_MODEL,
     messages,
     temperature: options.temperature ?? 0.7,
     max_tokens: options.maxTokens,
