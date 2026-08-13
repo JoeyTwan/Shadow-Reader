@@ -70,6 +70,7 @@ export async function POST(request: NextRequest) {
     let pageCount = 0;
     let chapterCount = 0;
     let bookTitle = "";
+    let bookAuthor = "";
 
     if (ext === ".pdf") {
       const pdfData = await parsePdf(buffer);
@@ -81,6 +82,7 @@ export async function POST(request: NextRequest) {
       text = epubData.text;
       chapterCount = epubData.chapterCount;
       bookTitle = epubData.title;
+      bookAuthor = epubData.author;
     }
 
     // 保存提取的文本（后续 AI 分析用）
@@ -97,6 +99,7 @@ export async function POST(request: NextRequest) {
       pageCount,
       chapterCount,
       title: bookTitle,
+      author: bookAuthor,
       uploadedAt: new Date().toISOString(),
       textLength: text.length,
     };

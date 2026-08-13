@@ -57,6 +57,8 @@ export interface BookMeta {
   fileSize: number;
   pageCount: number;
   chapterCount?: number;
+  title?: string;
+  author?: string;
   uploadedAt: string;
   textLength: number;
 }

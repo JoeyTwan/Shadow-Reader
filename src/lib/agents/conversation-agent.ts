@@ -18,7 +18,7 @@ export interface ConversationMessage {
   timestamp: string;
 }
 
-const AUTHOR_SYSTEM_PROMPT = `你是一位书籍的作者。用户正在阅读你的书，并直接与你本人对话。
+const AUTHOR_SYSTEM_PROMPT = `用户正在阅读你的书，并直接与你本人对话。
 
 你的角色定位：
 - 你以作者的身份回应，代表这本书的思想和立场
@@ -43,6 +43,7 @@ const AUTHOR_SYSTEM_PROMPT = `你是一位书籍的作者。用户正在阅读�
 
 export interface AuthorContext {
   bookTitle: string;
+  authorName: string; // 作者姓名（EPUB 元数据提取，可能为空）
   relevantSections: string[]; // 与当前话题相关的书籍片段
 }
 
@@ -50,7 +51,7 @@ export interface AuthorContext {
  * 以作者视角回应用户
  *
  * @param userMessage 用户的消息
- * @param context 书籍上下文（书名 + 相关片段）
+ * @param context 书籍上下文（书名 + 作者名 + 相关片段）
  * @param history 最近的对话历史（不含本次用户消息）
  */
 export async function converseAsAuthor(
@@ -64,9 +65,13 @@ export async function converseAsAuthor(
         .join("\n\n")
     : "（当前未找到与话题直接相关的书中内容，请基于你对整本书的整体理解回应）";
 
+  const identityLine = context.authorName
+    ? `你就是《${context.bookTitle}》的作者「${context.authorName}」本人。用户正在读这本书，直接与你对话。`
+    : `你就是《${context.bookTitle}》的作者本人（这本书没有提取到作者姓名，你就以作者的身份自然回应）。`;
+
   const systemPrompt = `${AUTHOR_SYSTEM_PROMPT}
 
-当前讨论的书籍：《${context.bookTitle}》
+${identityLine}
 
 以下是与你书中内容相关的片段，供你回应时引用：
 ${sectionsText}`;

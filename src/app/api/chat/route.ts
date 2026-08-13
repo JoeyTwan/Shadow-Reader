@@ -16,11 +16,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "消息不能为空" }, { status: 400 });
     }
 
-    // 读取书籍元信息
+    // 读取书籍元信息（书名优先用 EPUB 提取的 title，其次用去掉扩展名的文件名）
     let bookTitle = "这本书";
+    let bookAuthor = "";
     try {
       const meta = await readBookMeta(bookId);
-      bookTitle = meta.fileName.replace(/\.pdf$/i, "");
+      bookTitle =
+        meta.title?.trim() ||
+        meta.fileName.replace(/\.(pdf|epub)$/i, "");
+      bookAuthor = meta.author?.trim() ?? "";
     } catch {
       // 元信息读取失败时使用默认书名
     }
@@ -46,6 +50,7 @@ export async function POST(request: NextRequest) {
     // 以作者视角获取回复
     const reply = await converseAsAuthor(message, {
       bookTitle,
+      authorName: bookAuthor,
       relevantSections,
     }, history);
 

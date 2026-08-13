@@ -4,7 +4,7 @@ export default function Home() {
   return (
     <main className="min-h-screen flex flex-col">
       {/* 顶部导航 */}
-      <header className="border-b border-paper-200 px-8 py-4">
+      <header className="border-b border-paper-200 px-4 sm:px-8 py-4">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-xl font-serif text-ink">
@@ -21,11 +21,11 @@ export default function Home() {
       </header>
 
       {/* 主要内容区 */}
-      <div className="flex-1 flex items-center justify-center px-8 py-16">
+      <div className="flex-1 flex items-center justify-center px-4 sm:px-8 py-12 sm:py-16">
         <div className="max-w-2xl w-full">
           {/* 标语 */}
-          <div className="text-center mb-12 animate-fade-in">
-            <h1 className="text-3xl font-serif text-ink mb-4 leading-relaxed">
+          <div className="text-center mb-10 sm:mb-12 animate-fade-in">
+            <h1 className="text-2xl sm:text-3xl font-serif text-ink mb-4 leading-relaxed">
               不是让 AI 替你读书
               <br />
               而是让 AI 陪你一起思考
@@ -33,13 +33,13 @@ export default function Home() {
             <p className="text-ink-light font-sans text-base leading-relaxed">
               你读一本书，影子读者也在读。
               <br />
-              你产生疑问，它从不同视角回应。
+              你产生疑问，作者本人与你讨论。
               <br />
               你形成观点，它帮你记录和梳理。
             </p>
           </div>
 
-          {/* PDF 上传区域 */}
+          {/* 书籍上传区域 */}
           <div className="animate-fade-in" style={{ animationDelay: "0.1s" }}>
             <PdfUpload />
           </div>
@@ -49,7 +49,7 @@ export default function Home() {
             <FeatureItem
               step="01"
               title="上传"
-              description="上传一本 PDF 书籍，开启阅读旅程"
+              description="上传一本 PDF 或 EPUB 书籍，开启阅读旅程"
             />
             <FeatureItem
               step="02"
@@ -59,12 +59,12 @@ export default function Home() {
             <FeatureItem
               step="03"
               title="对话"
-              description="从作者视角、批判视角、思想伙伴视角与 AI 讨论"
+              description="以作者本人的身份与 AI 讨论，求同存异，不讨好你"
             />
             <FeatureItem
               step="04"
               title="记录"
-              description="AI 记录你的每一个重要观点和思想变化"
+              description="点击「思想总结」，AI 梳理你的观点与思想变化"
             />
           </div>
         </div>

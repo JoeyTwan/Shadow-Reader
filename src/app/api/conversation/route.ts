@@ -11,12 +11,16 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "缺少 bookId" }, { status: 400 });
     }
 
-    // 读取书籍元信息
+    // 读取书籍元信息（书名优先用 EPUB 提取的 title）
     let bookTitle = "这本书";
+    let bookAuthor = "";
     let fileName = "";
     try {
       const meta = await readBookMeta(bookId);
-      bookTitle = meta.fileName.replace(/\.pdf$/i, "");
+      bookTitle =
+        meta.title?.trim() ||
+        meta.fileName.replace(/\.(pdf|epub)$/i, "");
+      bookAuthor = meta.author?.trim() ?? "";
       fileName = meta.fileName;
     } catch {
       // 书籍可能不存在
@@ -32,6 +36,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       bookId,
       bookTitle,
+      bookAuthor,
       fileName,
       messages: conversation?.messages || [],
       insights: conversation?.insights ?? null,

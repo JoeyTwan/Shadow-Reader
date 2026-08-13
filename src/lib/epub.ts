@@ -15,6 +15,7 @@ import path from "path";
 export interface EpubData {
   text: string;
   title: string;
+  author: string;
   chapterCount: number;
 }
 
@@ -63,6 +64,15 @@ export async function extractEpub(buffer: Buffer): Promise<EpubData> {
   const title = (Array.isArray(rawTitle) ? rawTitle[0] : rawTitle ?? "")
     .trim()
     .replace(/\s+/g, " ");
+
+  // 提取作者（dc:creator，取第一个，去掉可能的角色标注如 [美]）
+  const rawAuthor = packageData.metadata?.["dc:creator"];
+  const author = (
+    Array.isArray(rawAuthor) ? rawAuthor[0] : rawAuthor ?? ""
+  )
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/^\[[^\]]+\]\s*/, "");
 
   // 4. 构建 manifest：id → href
   const manifestMap = new Map<string, string>();
@@ -115,6 +125,7 @@ export async function extractEpub(buffer: Buffer): Promise<EpubData> {
   return {
     text: chapters.join("\n\n"),
     title,
+    author,
     chapterCount: chapters.length,
   };
 }
