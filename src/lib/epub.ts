@@ -29,6 +29,32 @@ function asArray<T>(value: T | T[] | undefined): T[] {
   return Array.isArray(value) ? value : [value];
 }
 
+/**
+ * 从 fast-xml-parser 解析结果中安全提取文本值。
+ *
+ * 真实 EPUB 的 dc:title / dc:creator 常带 XML 属性（如 opf:role="aut"），
+ * 解析结果是对象而不是字符串：{ "@_opf:role": "aut", "#text": "作者名" }。
+ * 这里统一处理字符串 / 数组 / 对象三种形态，避免 .trim() 崩溃。
+ */
+function extractDcValue(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  if (Array.isArray(value)) {
+    return extractDcValue(value[0]);
+  }
+  if (typeof value === "string") {
+    return value.trim().replace(/\s+/g, " ");
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const text = obj["#text"];
+    if (typeof text === "string") {
+      return text.trim().replace(/\s+/g, " ");
+    }
+    return "";
+  }
+  return String(value).trim();
+}
+
 export async function extractEpub(buffer: Buffer): Promise<EpubData> {
   const zip = new AdmZip(buffer);
 
@@ -60,19 +86,12 @@ export async function extractEpub(buffer: Buffer): Promise<EpubData> {
   const opfDir = path.posix.dirname(rootfilePath);
 
   // 3. 提取书名（dc:title，取第一个）
-  const rawTitle = packageData.metadata?.["dc:title"];
-  const title = (Array.isArray(rawTitle) ? rawTitle[0] : rawTitle ?? "")
-    .trim()
-    .replace(/\s+/g, " ");
+  const title = extractDcValue(packageData.metadata?.["dc:title"]);
 
   // 提取作者（dc:creator，取第一个，去掉可能的角色标注如 [美]）
-  const rawAuthor = packageData.metadata?.["dc:creator"];
-  const author = (
-    Array.isArray(rawAuthor) ? rawAuthor[0] : rawAuthor ?? ""
-  )
-    .trim()
-    .replace(/\s+/g, " ")
-    .replace(/^\[[^\]]+\]\s*/, "");
+  const author = extractDcValue(
+    packageData.metadata?.["dc:creator"]
+  ).replace(/^\[[^\]]+\]\s*/, "");
 
   // 4. 构建 manifest：id → href
   const manifestMap = new Map<string, string>();
