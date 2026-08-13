@@ -111,8 +111,8 @@ export default function PdfUpload() {
             <button
               className="px-6 py-2 bg-accent text-white rounded-lg font-sans text-sm hover:bg-accent-dark transition-colors"
               onClick={() => {
-                // 后续跳转到对话页面
-                window.location.href = `/reader?id=${result.bookId}`;
+                // 跳转到与作者对话的阅读页面
+                window.location.href = `/reader/${result.bookId}`;
               }}
             >
               开始阅读

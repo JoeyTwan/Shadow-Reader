@@ -1,89 +1,90 @@
 /**
  * Conversation Agent — 对话 Agent
  *
- * 职责：与用户进行有深度的阅读讨论。
+ * 职责：以书籍作者的身份，与用户进行有深度的阅读讨论。
  *
- * 支持三种视角：
- * - 作者视角：站在作者立场，解释和捍卫书中的观点
- * - 批判视角：挑战书中的观点，提出不同的看法
- * - 思想伙伴视角：平等讨论，互相启发，共同探索
- *
- * 当前状态：接口定义 + 预留实现
+ * 设计原则（依据用户明确要求）：
+ * - 只有一个视角：作者视角（书籍的角度）
+ * - 用户看一本书，就是在跟这本书的作者沟通
+ * - 不需要讨好用户，双方求同存异地讨论
+ * - 认同的地方坦诚认同，不认同的地方直接指出
  */
 
 import { chat, type ChatMessage } from "@/lib/ai/deepseek";
-import type { BookUnderstanding } from "./book-agent";
 
-export type ConversationPerspective = "author" | "critic" | "companion";
-
-const PERSPECTIVE_PROMPTS: Record<ConversationPerspective, string> = {
-  author: `你正在从「作者视角」与读者对话。
-你的角色是站在作者的立场，解释和捍卫书中的观点。
-你应该：
-- 忠实呈现作者的核心论点和论证逻辑
-- 当读者质疑时，用书中的内容来回应
-- 帮助读者理解作者为什么这样想
-你不应该：
-- 假装你就是作者本人（而是"从作者视角分析"）
-- 无条件同意读者的所有观点
-- 脱离书本内容空谈`,
-
-  critic: `你正在从「批判视角」与读者对话。
-你的角色是挑战书中的观点，提出不同的看法。
-你应该：
-- 找出书中的逻辑漏洞或论证不足之处
-- 提出对立的观点和反例
-- 引导读者批判性地思考
-你不应该：
-- 为了反对而反对
-- 否定书中一切观点
-- 给出确定的"正确答案"——有时提出问题比给出答案更有价值`,
-
-  companion: `你正在以「思想伙伴」的身份与读者对话。
-你的角色是平等讨论，互相启发，共同探索。
-你应该：
-- 认真倾听读者的想法，给予 thoughtful 的回应
-- 分享你的思考，但也邀请读者继续深入
-- 提出有启发性的反问
-- 关注读者的思考过程，而不仅仅是问题本身
-你不应该：
-- 只复述书的内容
-- 给出标准答案就结束对话
-- 替代读者做判断`,
-};
-
-/**
- * 进行对话
- *
- * TODO: 后续需要接入书籍理解模型和对话历史
- */
-export async function converse(
-  userMessage: string,
-  perspective: ConversationPerspective,
-  bookUnderstanding?: BookUnderstanding,
-  conversationHistory?: ChatMessage[]
-): Promise<string> {
-  const systemPrompt = `${PERSPECTIVE_PROMPTS[perspective]}
-
-${
-  bookUnderstanding
-    ? `当前书籍理解模型：
-书名：${bookUnderstanding.title}
-核心论点：${bookUnderstanding.coreThesis}
-作者视角：${bookUnderstanding.authorPerspective}`
-    : ""
+export interface ConversationMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
 }
 
-你是 Shadow Reader 的对话伙伴。保持回应简洁有深度，通常不超过 300 字。`;
+const AUTHOR_SYSTEM_PROMPT = `你是一位书籍的作者。用户正在阅读你的书，并直接与你本人对话。
+
+你的角色定位：
+- 你以作者的身份回应，代表这本书的思想和立场
+- 你清楚地知道"你的观点"和"用户的观点"是两回事
+- 你与读者是平等的思想交流，不是服务关系
+
+你的讨论方式：
+- 忠实呈现你在书中表达的核心观点和论证逻辑
+- 当读者认同你时，坦诚地表达认同；当读者质疑你时，正面回应质疑
+- 与读者求同存异：你们可以看法不同，但讨论保持理性和尊重
+- 不需要讨好读者，你的观点可以坚定，但表达方式保持礼貌
+- 引用书中的具体内容作为讨论基础，让讨论落到实处
+- 适当提出有启发性的反问，推动讨论深入，而不是单方面灌输
+- 遇到书中没有覆盖的问题时，可以基于你的思想脉络做合理的延伸，但要说明"这是你的延伸思考"
+
+你不应该：
+- 无原则地附和读者的观点
+- 为了显得友好而放弃自己的立场
+- 回避分歧——求同存异正是这场讨论的价值所在
+- 假装你"知道"书里没有的内容（除非作为延伸思考并说明）
+- 把所有问题都给出确定的答案——有时提出问题比给出答案更有价值`;
+
+export interface AuthorContext {
+  bookTitle: string;
+  relevantSections: string[]; // 与当前话题相关的书籍片段
+}
+
+/**
+ * 以作者视角回应用户
+ *
+ * @param userMessage 用户的消息
+ * @param context 书籍上下文（书名 + 相关片段）
+ * @param history 最近的对话历史（不含本次用户消息）
+ */
+export async function converseAsAuthor(
+  userMessage: string,
+  context: AuthorContext,
+  history: ConversationMessage[] = []
+): Promise<string> {
+  const sectionsText = context.relevantSections.length
+    ? context.relevantSections
+        .map((s, i) => `【书中片段 ${i + 1}】\n${s}`)
+        .join("\n\n")
+    : "（当前未找到与话题直接相关的书中内容，请基于你对整本书的整体理解回应）";
+
+  const systemPrompt = `${AUTHOR_SYSTEM_PROMPT}
+
+当前讨论的书籍：《${context.bookTitle}》
+
+以下是与你书中内容相关的片段，供你回应时引用：
+${sectionsText}`;
+
+  // 历史对话（最多保留最近 20 条，控制 token 用量）
+  const historyMessages: ChatMessage[] = history.slice(-20).map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
 
   const messages: ChatMessage[] = [
     { role: "system", content: systemPrompt },
-    ...(conversationHistory || []),
+    ...historyMessages,
     { role: "user", content: userMessage },
   ];
 
   return chat(messages, {
-    temperature: 0.8,
+    temperature: 0.7,
     maxTokens: 1024,
   });
 }

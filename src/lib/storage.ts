@@ -27,6 +27,10 @@ export function getBookMetaPath(bookId: string): string {
   return path.join(UPLOAD_DIR, `${bookId}.meta.json`);
 }
 
+export function getConversationPath(bookId: string): string {
+  return path.join(UPLOAD_DIR, `${bookId}.conversation.json`);
+}
+
 export async function saveBookFile(bookId: string, buffer: Buffer) {
   await ensureUploadDir();
   await writeFile(getBookFilePath(bookId), buffer);
@@ -62,4 +66,48 @@ export async function readBookMeta(bookId: string): Promise<BookMeta> {
 
 export function generateBookId(): string {
   return crypto.randomUUID();
+}
+
+/**
+ * 对话记录持久化
+ *
+ * 每本书一份对话记录文件，结构：
+ * {
+ *   bookId, bookTitle,
+ *   messages: ConversationMessage[],
+ *   insights: InsightSummary | null   // 最近一次思想总结
+ * }
+ */
+
+export interface ConversationFile {
+  bookId: string;
+  bookTitle: string;
+  messages: {
+    role: "user" | "assistant";
+    content: string;
+    timestamp: string;
+  }[];
+  insights: unknown | null;
+}
+
+export async function readConversation(bookId: string): Promise<ConversationFile | null> {
+  try {
+    const data = await readFile(getConversationPath(bookId), "utf-8");
+    return JSON.parse(data);
+  } catch {
+    // 文件不存在视为还没有对话
+    return null;
+  }
+}
+
+export async function saveConversation(
+  bookId: string,
+  conversation: ConversationFile
+): Promise<void> {
+  await ensureUploadDir();
+  await writeFile(
+    getConversationPath(bookId),
+    JSON.stringify(conversation, null, 2),
+    "utf-8"
+  );
 }
