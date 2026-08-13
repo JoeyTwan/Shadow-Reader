@@ -1,0 +1,26 @@
+services:
+  app:
+    build: .
+    image: shadow-reader:latest
+    restart: always
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:?请在 .env 中配置 DEEPSEEK_API_KEY}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
+    volumes:
+      - ./uploads:/app/uploads
+    expose:
+      - "3000"
+
+  nginx:
+    image: nginx:alpine
+    restart: always
+    ports:
+      # 服务器 80 端口已被现有项目占用，Shadow Reader 使用 8080
+      # 访问地址: http://<服务器IP>:8080
+      - "8080:80"
+      # 后续有域名后启用 443（HTTPS）
+      # - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
