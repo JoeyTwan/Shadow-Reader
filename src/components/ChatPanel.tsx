@@ -124,6 +124,20 @@ export default function ChatPanel({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, insight]);
 
+  // 面板打开时自动聚焦输入框
+  useEffect(() => {
+    const timer = setTimeout(() => inputRef.current?.focus(), 100);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // AI 回复完成后（无论成功失败），自动聚焦回输入框
+  useEffect(() => {
+    if (!sending) {
+      const timer = setTimeout(() => inputRef.current?.focus(), 50);
+      return () => clearTimeout(timer);
+    }
+  }, [sending]);
+
   // 输入内容变化（含语音识别填入）时自动增高输入框
   useEffect(() => {
     if (inputRef.current) resizeInput(inputRef.current);
