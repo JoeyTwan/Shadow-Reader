@@ -3,6 +3,9 @@ import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 import crypto from "crypto";
 
+const ALLOWED_EXTENSIONS = [".pdf", ".epub"];
+const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
+
 // PDF 解析使用动态导入，避免构建时问题
 async function parsePdf(buffer: Buffer) {
   try {
@@ -30,19 +33,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "没有收到文件" }, { status: 400 });
     }
 
-    // 验证文件类型
-    if (file.type !== "application/pdf") {
+    // 校验扩展名（MIME 类型不可靠，EPUB 常被识别为 octet-stream）
+    const ext = path.extname(file.name).toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
       return NextResponse.json(
-        { error: "请上传 PDF 格式的文件" },
+        { error: "请上传 PDF 或 EPUB 格式的文件" },
         { status: 400 }
       );
     }
 
-    // 验证文件大小（50MB）
-    const maxSize = 50 * 1024 * 1024;
-    if (file.size > maxSize) {
+    // 校验文件大小（200MB）
+    if (file.size > MAX_FILE_SIZE) {
       return NextResponse.json(
-        { error: "文件大小不能超过 50MB" },
+        { error: "文件大小不能超过 200MB" },
         { status: 400 }
       );
     }
@@ -58,36 +61,59 @@ export async function POST(request: NextRequest) {
     const uploadDir = path.join(process.cwd(), "uploads");
     await mkdir(uploadDir, { recursive: true });
 
-    // 保存 PDF 文件
-    const filePath = path.join(uploadDir, `${bookId}.pdf`);
+    // 保存原始文件
+    const filePath = path.join(uploadDir, `${bookId}${ext}`);
     await writeFile(filePath, buffer);
 
-    // 解析 PDF 获取基本信息
-    const pdfData = await parsePdf(buffer);
+    // 按格式解析提取文本
+    let text = "";
+    let pageCount = 0;
+    let chapterCount = 0;
+    let bookTitle = "";
+
+    if (ext === ".pdf") {
+      const pdfData = await parsePdf(buffer);
+      text = pdfData.text;
+      pageCount = pdfData.pageCount;
+    } else {
+      const { extractEpub } = await import("@/lib/epub");
+      const epubData = await extractEpub(buffer);
+      text = epubData.text;
+      chapterCount = epubData.chapterCount;
+      bookTitle = epubData.title;
+    }
 
     // 保存提取的文本（后续 AI 分析用）
     const textPath = path.join(uploadDir, `${bookId}.txt`);
-    await writeFile(textPath, pdfData.text, "utf-8");
+    await writeFile(textPath, text, "utf-8");
 
     // 保存书籍元信息
     const metaPath = path.join(uploadDir, `${bookId}.meta.json`);
     const meta = {
       bookId,
       fileName: file.name,
+      fileType: ext.slice(1),
       fileSize: file.size,
-      pageCount: pdfData.pageCount,
+      pageCount,
+      chapterCount,
+      title: bookTitle,
       uploadedAt: new Date().toISOString(),
-      textLength: pdfData.text.length,
+      textLength: text.length,
     };
     await writeFile(metaPath, JSON.stringify(meta, null, 2), "utf-8");
 
-    console.log(`[Shadow Reader] 书籍上传成功: ${file.name} (${bookId})`);
+    console.log(
+      `[Shadow Reader] 书籍上传成功: ${file.name} (${bookId}, ${ext.slice(1)})`
+    );
 
     return NextResponse.json({
       bookId,
       fileName: file.name,
+      fileType: ext.slice(1),
       fileSize: file.size,
-      pageCount: pdfData.pageCount,
+      pageCount,
+      chapterCount,
+      title: bookTitle,
     });
   } catch (error) {
     console.error("[Shadow Reader] 上传失败:", error);

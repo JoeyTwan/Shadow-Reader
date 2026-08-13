@@ -1,9 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // PDF 文件上传大小限制（50MB）
+  // 书籍文件上传大小限制（200MB）
   experimental: {
     serverActions: {
-      bodySizeLimit: '50mb',
+      bodySizeLimit: '200mb',
     },
   },
 };

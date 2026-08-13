@@ -4,11 +4,15 @@ import { useState, useCallback, useRef } from "react";
 
 type UploadStatus = "idle" | "uploading" | "success" | "error";
 
+const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
+
 interface UploadResult {
   bookId: string;
   fileName: string;
+  fileType: string;
   fileSize: number;
   pageCount: number;
+  chapterCount: number;
 }
 
 export default function PdfUpload() {
@@ -18,19 +22,19 @@ export default function PdfUpload() {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-
   const handleFile = useCallback(async (file: File) => {
-    if (file.type !== "application/pdf") {
+    // 按扩展名校验（EPUB 的 MIME 类型不可靠）
+    const validExt = /\.(pdf|epub)$/i.test(file.name);
+    if (!validExt) {
       setStatus("error");
-      setErrorMessage("请上传 PDF 格式的文件");
+      setErrorMessage("请上传 PDF 或 EPUB 格式的文件");
       return;
     }
 
     // 验证文件大小
     if (file.size > MAX_FILE_SIZE) {
       setStatus("error");
-      setErrorMessage("文件大小不能超过 50MB");
+      setErrorMessage("文件大小不能超过 200MB");
       return;
     }
 
@@ -105,7 +109,10 @@ export default function PdfUpload() {
             {result.fileName}
           </p>
           <p className="text-xs text-ink-muted font-sans mb-6">
-            {formatFileSize(result.fileSize)} · {result.pageCount} 页
+            {formatFileSize(result.fileSize)} ·{" "}
+            {result.fileType === "epub"
+              ? `${result.chapterCount} 章节`
+              : `${result.pageCount} 页`}
           </p>
           <div className="flex gap-3 justify-center">
             <button
@@ -145,7 +152,7 @@ export default function PdfUpload() {
           <input
             ref={fileInputRef}
             type="file"
-            accept="application/pdf"
+            accept=".pdf,.epub,application/pdf,application/epub+zip"
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -208,10 +215,10 @@ export default function PdfUpload() {
                 </svg>
               </div>
               <p className="font-serif text-ink text-base mb-2">
-                拖拽 PDF 文件到此处
+                拖拽 PDF 或 EPUB 文件到此处
               </p>
               <p className="text-sm text-ink-muted font-sans">
-                或点击选择文件 · 最大 50MB
+                或点击选择文件 · 最大 200MB
               </p>
             </div>
           )}

@@ -1,7 +1,7 @@
 /**
  * 文件存储工具
  *
- * 管理上传的 PDF 文件和提取的文本。
+ * 管理上传的书籍文件（PDF/EPUB）和提取的文本。
  * MVP 阶段使用本地文件系统存储。
  */
 
@@ -15,8 +15,8 @@ export async function ensureUploadDir() {
   await mkdir(UPLOAD_DIR, { recursive: true });
 }
 
-export function getBookFilePath(bookId: string): string {
-  return path.join(UPLOAD_DIR, `${bookId}.pdf`);
+export function getBookFilePath(bookId: string, ext: string = "pdf"): string {
+  return path.join(UPLOAD_DIR, `${bookId}.${ext}`);
 }
 
 export function getBookTextPath(bookId: string): string {
@@ -31,9 +31,9 @@ export function getConversationPath(bookId: string): string {
   return path.join(UPLOAD_DIR, `${bookId}.conversation.json`);
 }
 
-export async function saveBookFile(bookId: string, buffer: Buffer) {
+export async function saveBookFile(bookId: string, buffer: Buffer, ext: string = "pdf") {
   await ensureUploadDir();
-  await writeFile(getBookFilePath(bookId), buffer);
+  await writeFile(getBookFilePath(bookId, ext), buffer);
 }
 
 export async function saveBookText(bookId: string, text: string) {
@@ -53,8 +53,10 @@ export async function readBookText(bookId: string): Promise<string> {
 export interface BookMeta {
   bookId: string;
   fileName: string;
+  fileType: string;
   fileSize: number;
   pageCount: number;
+  chapterCount?: number;
   uploadedAt: string;
   textLength: number;
 }
