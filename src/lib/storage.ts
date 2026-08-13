@@ -5,7 +5,7 @@
  * MVP 阶段使用本地文件系统存储。
  */
 
-import { readFile, writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile, mkdir, readdir } from "fs/promises";
 import path from "path";
 import crypto from "crypto";
 
@@ -29,6 +29,14 @@ export function getBookMetaPath(bookId: string): string {
 
 export function getConversationPath(bookId: string): string {
   return path.join(UPLOAD_DIR, `${bookId}.conversation.json`);
+}
+
+export function getChaptersPath(bookId: string): string {
+  return path.join(UPLOAD_DIR, `${bookId}.chapters.json`);
+}
+
+export function getProgressPath(bookId: string): string {
+  return path.join(UPLOAD_DIR, `${bookId}.progress.json`);
 }
 
 export async function saveBookFile(bookId: string, buffer: Buffer, ext: string = "pdf") {
@@ -114,4 +122,80 @@ export async function saveConversation(
     JSON.stringify(conversation, null, 2),
     "utf-8"
   );
+}
+
+/**
+ * 阅读进度持久化
+ *
+ * 每本书一份 progress.json：
+ * {
+ *   bookId, mode: "scroll" | "page",
+ *   scrollRatio: 0-1（滚动模式阅读位置），
+ *   pageIndex（翻页模式当前页），
+ *   updatedAt
+ * }
+ */
+
+export interface ReadingProgress {
+  bookId: string;
+  mode: "scroll" | "page";
+  scrollRatio: number;
+  pageIndex: number;
+  updatedAt: string;
+}
+
+export async function readReadingProgress(
+  bookId: string
+): Promise<ReadingProgress | null> {
+  try {
+    const data = await readFile(getProgressPath(bookId), "utf-8");
+    return JSON.parse(data);
+  } catch {
+    return null;
+  }
+}
+
+export async function saveReadingProgress(progress: ReadingProgress) {
+  await ensureUploadDir();
+  await writeFile(
+    getProgressPath(progress.bookId),
+    JSON.stringify(progress, null, 2),
+    "utf-8"
+  );
+}
+
+/**
+ * 书架：扫描 uploads 目录所有书籍元信息，合并阅读进度，按上传时间倒序。
+ */
+export interface BookShelfItem extends BookMeta {
+  progress: ReadingProgress | null;
+  lastReadAt: string;
+}
+
+export async function listBooks(): Promise<BookShelfItem[]> {
+  await ensureUploadDir();
+  const files = await readdir(UPLOAD_DIR);
+  const metaFiles = files.filter((f) => f.endsWith(".meta.json"));
+
+  const books = await Promise.all(
+    metaFiles.map(async (f) => {
+      try {
+        const meta = JSON.parse(
+          await readFile(path.join(UPLOAD_DIR, f), "utf-8")
+        ) as BookMeta;
+        const progress = await readReadingProgress(meta.bookId);
+        return {
+          ...meta,
+          progress,
+          lastReadAt: progress?.updatedAt ?? meta.uploadedAt,
+        } satisfies BookShelfItem;
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  return books
+    .filter((b): b is BookShelfItem => b !== null)
+    .sort((a, b) => (a.lastReadAt < b.lastReadAt ? 1 : -1));
 }

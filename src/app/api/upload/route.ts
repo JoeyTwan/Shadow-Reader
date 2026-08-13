@@ -71,6 +71,7 @@ export async function POST(request: NextRequest) {
     let chapterCount = 0;
     let bookTitle = "";
     let bookAuthor = "";
+    let chapters: { title: string; text: string }[] | null = null;
 
     if (ext === ".pdf") {
       const pdfData = await parsePdf(buffer);
@@ -83,11 +84,40 @@ export async function POST(request: NextRequest) {
       chapterCount = epubData.chapterCount;
       bookTitle = epubData.title;
       bookAuthor = epubData.author;
+      chapters = epubData.chapters;
     }
 
     // 保存提取的文本（后续 AI 分析用）
     const textPath = path.join(uploadDir, `${bookId}.txt`);
     await writeFile(textPath, text, "utf-8");
+
+    // EPUB 额外保存章节结构（阅读器目录/翻页用）
+    if (chapters) {
+      const chaptersPath = path.join(uploadDir, `${bookId}.chapters.json`);
+      await writeFile(
+        chaptersPath,
+        JSON.stringify(chapters, null, 2),
+        "utf-8"
+      );
+    }
+
+    // 初始化阅读进度（从 0 开始）
+    const progressPath = path.join(uploadDir, `${bookId}.progress.json`);
+    await writeFile(
+      progressPath,
+      JSON.stringify(
+        {
+          bookId,
+          mode: "scroll",
+          scrollRatio: 0,
+          pageIndex: 0,
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      ),
+      "utf-8"
+    );
 
     // 保存书籍元信息
     const metaPath = path.join(uploadDir, `${bookId}.meta.json`);

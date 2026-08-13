@@ -12,11 +12,47 @@ import { convert } from "html-to-text";
 import { XMLParser } from "fast-xml-parser";
 import path from "path";
 
+export interface EpubChapter {
+  title: string;
+  text: string;
+}
+
+// toc.ncx 中 navPoint 的最小结构
+interface TocNavPoint {
+  navLabel?: { text?: unknown };
+  content?: { "@_src"?: unknown };
+  navPoint?: unknown;
+}
+
 export interface EpubData {
   text: string;
   title: string;
   author: string;
   chapterCount: number;
+  chapters: EpubChapter[];
+}
+
+/**
+ * 从章节 HTML 中提取标题（第一个 h1-h6，其次正文第一短行），提取不到则用「第 N 章」兜底。
+ */
+function extractChapterTitle(html: string, index: number, text: string): string {
+  const match = html.match(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i);
+  if (match && match[1]) {
+    const title = convert(match[1], { wordwrap: false })
+      .trim()
+      .replace(/\s+/g, " ");
+    if (title && title.length <= 80) return title;
+  }
+  // 无标题标签的书：用正文第一短行当标题
+  const firstLine =
+    text
+      .split("\n")
+      .map((s) => s.trim())
+      .find((s) => s.length > 0) ?? "";
+  if (firstLine && firstLine.length <= 30 && text.length > firstLine.length * 3) {
+    return firstLine;
+  }
+  return `第 ${index + 1} 章`;
 }
 
 const xmlParser = new XMLParser({
@@ -103,8 +139,47 @@ export async function extractEpub(buffer: Buffer): Promise<EpubData> {
     }
   }
 
+  // 4.5 读取目录文件 toc.ncx（若有），构建 src → 章节标题映射
+  // 目录是章节标题的权威来源，比从章节 HTML 猜测更准确
+  const tocMap = new Map<string, string>();
+  const tocId = packageData.spine?.["@_toc"];
+  let tocHref = tocId ? manifestMap.get(tocId) : null;
+  if (!tocHref) {
+    // 兜底：按 media-type 查找 ncx 文件
+    for (const item of asArray(packageData.manifest?.item)) {
+      if (item["@_media-type"] === "application/x-dtbncx+xml") {
+        tocHref = item["@_href"]
+          ? decodeURIComponent(item["@_href"])
+          : null;
+        break;
+      }
+    }
+  }
+  if (tocHref) {
+    const tocPath = opfDir && opfDir !== "." ? `${opfDir}/${tocHref}` : tocHref;
+    const tocEntry = zip.getEntry(tocPath);
+    if (tocEntry) {
+      try {
+        const toc = xmlParser.parse(tocEntry.getData().toString("utf-8"));
+        const flattenToc = (points: unknown): void => {
+          for (const point of asArray(points as TocNavPoint[])) {
+            const label = extractDcValue(point.navLabel?.text);
+            const src = point.content?.["@_src"];
+            if (label && typeof src === "string") {
+              tocMap.set(src.split("#")[0], label);
+            }
+            if (point.navPoint) flattenToc(point.navPoint);
+          }
+        };
+        flattenToc(toc.ncx?.navMap?.navPoint);
+      } catch (e) {
+        console.warn("解析 toc.ncx 失败，回退到章节 HTML 提取标题:", e);
+      }
+    }
+  }
+
   // 5. 按 spine 顺序提取章节文本
-  const chapters: string[] = [];
+  const chapters: EpubChapter[] = [];
   for (const ref of asArray(packageData.spine?.itemref)) {
     // 跳过 linear="no" 的条目（通常是目录页等）
     if (ref["@_linear"] === "no") continue;
@@ -133,7 +208,13 @@ export async function extractEpub(buffer: Buffer): Promise<EpubData> {
       .trim();
 
     if (text.length > 0) {
-      chapters.push(text);
+      // 标题优先级：toc.ncx 目录 > 章节 HTML 标题 > 「第 N 章」兜底
+      const hrefKey = href.split("#")[0];
+      const tocTitle = tocMap.get(hrefKey);
+      chapters.push({
+        title: tocTitle || extractChapterTitle(html, chapters.length, text),
+        text,
+      });
     }
   }
 
@@ -142,9 +223,10 @@ export async function extractEpub(buffer: Buffer): Promise<EpubData> {
   }
 
   return {
-    text: chapters.join("\n\n"),
+    text: chapters.map((c) => c.text).join("\n\n"),
     title,
     author,
     chapterCount: chapters.length,
+    chapters,
   };
 }

@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 type UploadStatus = "idle" | "uploading" | "success" | "error";
 
@@ -15,54 +17,62 @@ interface UploadResult {
   chapterCount: number;
 }
 
-export default function PdfUpload() {
+export default function PdfUpload({ compact = false }: { compact?: boolean }) {
+  const router = useRouter();
   const [status, setStatus] = useState<UploadStatus>("idle");
   const [errorMessage, setErrorMessage] = useState("");
   const [result, setResult] = useState<UploadResult | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFile = useCallback(async (file: File) => {
-    // 按扩展名校验（EPUB 的 MIME 类型不可靠）
-    const validExt = /\.(pdf|epub)$/i.test(file.name);
-    if (!validExt) {
-      setStatus("error");
-      setErrorMessage("请上传 PDF 或 EPUB 格式的文件");
-      return;
-    }
-
-    // 验证文件大小
-    if (file.size > MAX_FILE_SIZE) {
-      setStatus("error");
-      setErrorMessage("文件大小不能超过 200MB");
-      return;
-    }
-
-    setStatus("uploading");
-    setErrorMessage("");
-
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const response = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "上传失败");
+  const handleFile = useCallback(
+    async (file: File) => {
+      // 按扩展名校验（EPUB 的 MIME 类型不可靠）
+      const validExt = /\.(pdf|epub)$/i.test(file.name);
+      if (!validExt) {
+        setStatus("error");
+        setErrorMessage("请上传 PDF 或 EPUB 格式的文件");
+        return;
       }
 
-      const data = await response.json();
-      setResult(data);
-      setStatus("success");
-    } catch (err) {
-      setStatus("error");
-      setErrorMessage(err instanceof Error ? err.message : "上传失败，请重试");
-    }
-  }, []);
+      // 验证文件大小
+      if (file.size > MAX_FILE_SIZE) {
+        setStatus("error");
+        setErrorMessage("文件大小不能超过 200MB");
+        return;
+      }
+
+      setStatus("uploading");
+      setErrorMessage("");
+
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const response = await fetch("/api/upload", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || "上传失败");
+        }
+
+        const data = await response.json();
+        setResult(data);
+        setStatus("success");
+        // 刷新书架列表（新书出现在顶部）
+        router.refresh();
+      } catch (err) {
+        setStatus("error");
+        setErrorMessage(
+          err instanceof Error ? err.message : "上传失败，请重试"
+        );
+      }
+    },
+    [router]
+  );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -87,7 +97,44 @@ export default function PdfUpload() {
 
   return (
     <div className="w-full">
-      {status === "success" && result ? (
+      {compact ? (
+        <div className="flex flex-col items-end">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={status === "uploading"}
+            className={`px-4 py-2 rounded-lg font-sans text-sm transition-colors flex items-center gap-1.5 border shrink-0 ${
+              status === "error"
+                ? "border-red-300 text-red-600 bg-red-50/30"
+                : status === "success"
+                ? "border-green-300 text-green-700 bg-green-50"
+                : "border-paper-300 text-ink-light hover:border-accent-light hover:bg-paper-100"
+            }`}
+          >
+            {status === "uploading" ? (
+              <>
+                <span className="w-3.5 h-3.5 border-2 border-paper-300 border-t-accent rounded-full animate-spin" />
+                解析中...
+              </>
+            ) : status === "error" ? (
+              "上传失败，点击重试"
+            ) : status === "success" ? (
+              "已加入书架 ✓"
+            ) : (
+              "＋ 上传新书"
+            )}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.epub,application/pdf,application/epub+zip"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleFile(file);
+            }}
+          />
+        </div>
+      ) : status === "success" && result ? (
         <div className="bg-white border border-paper-200 rounded-xl p-8 text-center">
           <div className="w-12 h-12 mx-auto mb-4 rounded-full bg-green-50 flex items-center justify-center">
             <svg
@@ -104,7 +151,9 @@ export default function PdfUpload() {
               />
             </svg>
           </div>
-          <h3 className="font-serif text-ink text-lg mb-2">上传成功</h3>
+          <h3 className="font-serif text-ink text-lg mb-2">
+            已加入书架
+          </h3>
           <p className="text-sm text-ink-light font-sans mb-1">
             {result.fileName}
           </p>
@@ -115,20 +164,17 @@ export default function PdfUpload() {
               : `${result.pageCount} 页`}
           </p>
           <div className="flex gap-3 justify-center">
-            <button
+            <Link
+              href={`/read/${result.bookId}`}
               className="px-6 py-2 bg-accent text-white rounded-lg font-sans text-sm hover:bg-accent-dark transition-colors"
-              onClick={() => {
-                // 跳转到与作者对话的阅读页面
-                window.location.href = `/reader/${result.bookId}`;
-              }}
             >
               开始阅读
-            </button>
+            </Link>
             <button
               className="px-6 py-2 border border-paper-300 text-ink-light rounded-lg font-sans text-sm hover:bg-paper-100 transition-colors"
               onClick={handleReset}
             >
-              重新上传
+              再传一本
             </button>
           </div>
         </div>
