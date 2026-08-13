@@ -201,25 +201,28 @@ export async function listBooks(): Promise<BookShelfItem[]> {
 }
 
 /**
- * 删除一本书的所有关联文件（原书、文本、章节、进度、对话记录）。
+ * 删除一本书的所有关联文件（原书、文本、章节、进度、对话记录等）。
+ * 采用按 bookId 前缀扫描目录的方式，确保任何后缀的文件都能删干净，
+ * 不会因为新增了文件类型而留下尾巴。
  */
 export async function deleteBook(bookId: string): Promise<void> {
-  const suffixes = [
-    "meta.json",
-    "txt",
-    "chapters.json",
-    "progress.json",
-    "conversation.json",
-    "pdf",
-    "epub",
-  ];
+  let files: string[];
+  try {
+    files = await readdir(UPLOAD_DIR);
+  } catch {
+    // uploads 目录不存在，无需清理
+    return;
+  }
+  const prefix = `${bookId}.`;
   await Promise.all(
-    suffixes.map(async (ext) => {
-      try {
-        await unlink(path.join(UPLOAD_DIR, `${bookId}.${ext}`));
-      } catch {
-        // 文件不存在就跳过
-      }
-    })
+    files
+      .filter((name) => name.startsWith(prefix))
+      .map(async (name) => {
+        try {
+          await unlink(path.join(UPLOAD_DIR, name));
+        } catch (e) {
+          console.warn(`[Shadow Reader] 删除文件失败: ${name}`, e);
+        }
+      })
   );
 }

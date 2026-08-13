@@ -25,6 +25,8 @@ async function parsePdf(buffer: Buffer) {
 }
 
 export async function POST(request: NextRequest) {
+  let bookId = "";
+  let uploadDir = "";
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
@@ -55,10 +57,10 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(bytes);
 
     // 生成唯一 bookId
-    const bookId = crypto.randomUUID();
+    bookId = crypto.randomUUID();
 
     // 确保上传目录存在
-    const uploadDir = path.join(process.cwd(), "uploads");
+    uploadDir = path.join(process.cwd(), "uploads");
     await mkdir(uploadDir, { recursive: true });
 
     // 保存原始文件
@@ -150,6 +152,23 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("[Shadow Reader] 上传失败:", error);
+    // 清理本次上传已写入的孤儿文件（原书/文本/章节等），不留尾巴
+    if (bookId && uploadDir) {
+      try {
+        const { readdir: listDir, unlink: removeFile } = await import(
+          "fs/promises"
+        );
+        const files = await listDir(uploadDir);
+        await Promise.all(
+          files
+            .filter((name) => name.startsWith(`${bookId}.`))
+            .map((name) => removeFile(path.join(uploadDir, name)).catch(() => {}))
+        );
+        console.log(`[Shadow Reader] 已清理失败上传的残留文件: ${bookId}`);
+      } catch (cleanupError) {
+        console.warn("[Shadow Reader] 清理残留文件失败:", cleanupError);
+      }
+    }
     return NextResponse.json(
       { error: "上传失败，请重试" },
       { status: 500 }
