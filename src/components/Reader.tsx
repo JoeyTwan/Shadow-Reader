@@ -3,11 +3,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import ChatPanel from "@/components/ChatPanel";
+import TTSBar from "@/components/TTSBar";
 
 interface ChapterItem {
   title: string;
   text: string;
   level?: number;
+}
+
+interface FlatPara {
+  chapIdx: number;
+  paraIdx: number;
+  text: string;
 }
 
 interface ReadingProgress {
@@ -38,6 +45,30 @@ const FONT_KEY = "shadow-reader-fontsize";
 const MIN_FONT = 15;
 const MAX_FONT = 30;
 
+type TTSState = "idle" | "playing" | "paused";
+
+// 把长段落按句子切成朗读块，每块约 200 字符以内
+function splitChunks(text: string, maxLen = 200): string[] {
+  const sentences = text.split(/(?<=[。！？!?；;…])/);
+  const parts: string[] = [];
+  let buf = "";
+  for (const s of sentences) {
+    if ((buf + s).length > maxLen && buf) {
+      parts.push(buf);
+      buf = s;
+    } else {
+      buf += s;
+    }
+  }
+  if (buf) parts.push(buf);
+  // 兜底：仍有超长块（无标点长串）按 maxLen 硬切
+  return parts.flatMap((p) =>
+    p.length > maxLen * 2
+      ? p.match(new RegExp(`.{1,${maxLen * 2}}`, "g"))!
+      : [p]
+  );
+}
+
 export default function Reader({ bookId }: { bookId: string }) {
   const [detail, setDetail] = useState<BookDetail | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -47,6 +78,13 @@ export default function Reader({ bookId }: { bookId: string }) {
   const [currentChapter, setCurrentChapter] = useState(0);
   const [chatOpen, setChatOpen] = useState(false);
 
+  // TTS 朗读状态
+  const [ttsState, setTtsState] = useState<TTSState>("idle");
+  const [ttsParaIndex, setTtsParaIndex] = useState(-1);
+  const [ttsCurrentText, setTtsCurrentText] = useState("");
+  const [ttsVoice, setTtsVoice] = useState("xiaoxiao");
+  const [ttsRate, setTtsRate] = useState(0);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const chapterRefs = useRef<(HTMLElement | null)[]>([]);
   const modeRef = useRef<ReadMode>("scroll");
@@ -55,6 +93,32 @@ export default function Reader({ bookId }: { bookId: string }) {
   // 是否真的产生过阅读行为（滚动/翻页），用于卸载时决定是否保存进度，
   // 避免 dev 模式 StrictMode 挂载即卸载时把进度覆盖为 0
   const hasReadRef = useRef(false);
+
+  // TTS 朗读引擎 refs（避免闭包过期）
+  const ttsVoiceRef = useRef("xiaoxiao");
+  const ttsRateRef = useRef(0);
+  const ttsPlayingRef = useRef(false);
+  const ttsQueueRef = useRef<string[]>([]);
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsParaIndexRef = useRef(-1);
+  const ttsPrefetchRef = useRef<{
+    text: string;
+    voice: string;
+    rate: number;
+    url: string;
+  } | null>(null);
+  const flatParasRef = useRef<FlatPara[]>([]);
+  const pagesRef = useRef<typeof pages>([]);
+
+  useEffect(() => {
+    ttsVoiceRef.current = ttsVoice;
+  }, [ttsVoice]);
+  useEffect(() => {
+    ttsRateRef.current = ttsRate;
+  }, [ttsRate]);
+  useEffect(() => {
+    ttsParaIndexRef.current = ttsParaIndex;
+  }, [ttsParaIndex]);
 
   // 加载书籍数据
   useEffect(() => {
@@ -182,9 +246,15 @@ export default function Reader({ bookId }: { bookId: string }) {
   const pages = useMemo(() => {
     if (!detail) return [];
     const TARGET = fontSize * 40; // 字号越大每页字数越少
-    const result: { chapterIndex: number; paras: string[] }[] = [];
+    const result: {
+      chapterIndex: number;
+      paras: string[];
+      paraStarts: number[];
+    }[] = [];
     let current: string[] = [];
+    let currentStarts: number[] = [];
     let len = 0;
+    let globalIdx = 0;
     detail.chapters.forEach((ch, ci) => {
       const paras = ch.text
         .split(/\n+/)
@@ -192,10 +262,13 @@ export default function Reader({ bookId }: { bookId: string }) {
         .filter((s) => s.length > 0);
       for (const p of paras) {
         current.push(p);
+        currentStarts.push(globalIdx);
+        globalIdx++;
         len += p.length;
         if (len >= TARGET) {
-          result.push({ chapterIndex: ci, paras: current });
+          result.push({ chapterIndex: ci, paras: current, paraStarts: currentStarts });
           current = [];
+          currentStarts = [];
           len = 0;
         }
       }
@@ -204,10 +277,52 @@ export default function Reader({ bookId }: { bookId: string }) {
       result.push({
         chapterIndex: detail.chapters.length - 1,
         paras: current,
+        paraStarts: currentStarts,
       });
     }
     return result;
   }, [detail, fontSize]);
+
+  // 供 TTS 引擎读取最新分页（声明顺序须在 pages 之后）
+  useEffect(() => {
+    pagesRef.current = pages;
+  }, [pages]);
+
+  // 展平后的全部段落（全局顺序即朗读顺序）
+  const flatParas = useMemo(() => {
+    if (!detail) return [];
+    const list: FlatPara[] = [];
+    detail.chapters.forEach((ch, chapIdx) => {
+      const paras = ch.text
+        .split(/\n+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      paras.forEach((text, paraIdx) => {
+        list.push({ chapIdx, paraIdx, text });
+      });
+    });
+    return list;
+  }, [detail]);
+
+  // 供 TTS 引擎读取最新段落列表（声明顺序须在 flatParas 之后）
+  useEffect(() => {
+    flatParasRef.current = flatParas;
+  }, [flatParas]);
+
+  // 每章起始段落的全局索引（滚动模式高亮定位用）
+  const chapterStarts = useMemo(() => {
+    const starts: number[] = [];
+    let acc = 0;
+    for (const ch of detail?.chapters ?? []) {
+      starts.push(acc);
+      const count = ch.text
+        .split(/\n+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0).length;
+      acc += count;
+    }
+    return starts;
+  }, [detail]);
 
   // 滚动监听：更新当前章节 + 防抖保存进度
   const handleScroll = useCallback(() => {
@@ -320,6 +435,221 @@ export default function Reader({ bookId }: { bookId: string }) {
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  // ============ TTS 朗读引擎 ============
+
+  // 请求合成一段音频
+  const fetchAudio = useCallback(async (text: string): Promise<string> => {
+    const res = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        voice: ttsVoiceRef.current,
+        rate: ttsRateRef.current,
+      }),
+    });
+    if (!res.ok) throw new Error(`TTS ${res.status}`);
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  }, []);
+
+  // 停止朗读
+  const stopTts = useCallback(() => {
+    ttsPlayingRef.current = false;
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause();
+      ttsAudioRef.current.src = "";
+    }
+    if (ttsPrefetchRef.current) {
+      URL.revokeObjectURL(ttsPrefetchRef.current.url);
+      ttsPrefetchRef.current = null;
+    }
+    ttsQueueRef.current = [];
+    setTtsState("idle");
+    setTtsParaIndex(-1);
+    setTtsCurrentText("");
+  }, []);
+
+  // 播放当前段落队列里的下一个块
+  const playNextChunk = useCallback(async () => {
+    if (!ttsPlayingRef.current) return;
+    const chunk = ttsQueueRef.current.shift();
+    if (!chunk) {
+      // 本段播完，进入下一段
+      const next = ttsParaIndexRef.current + 1;
+      const para = flatParasRef.current[next];
+      if (para) {
+        setTtsParaIndex(next);
+        ttsQueueRef.current = splitChunks(para.text);
+        await playNextChunk();
+      } else {
+        stopTts(); // 全书读完
+      }
+      return;
+    }
+    setTtsCurrentText(chunk);
+    try {
+      let url: string | null = null;
+      // 命中预取（同一文本 + 同一声音 + 同一语速）
+      if (
+        ttsPrefetchRef.current &&
+        ttsPrefetchRef.current.text === chunk &&
+        ttsPrefetchRef.current.voice === ttsVoiceRef.current &&
+        ttsPrefetchRef.current.rate === ttsRateRef.current
+      ) {
+        url = ttsPrefetchRef.current.url;
+        ttsPrefetchRef.current = null;
+      }
+      if (!url) url = await fetchAudio(chunk);
+      let audio = ttsAudioRef.current;
+      if (!audio) {
+        audio = new Audio();
+        ttsAudioRef.current = audio;
+      }
+      audio.src = url;
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        playNextChunk();
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        playNextChunk();
+      };
+      await audio.play();
+      // 预取下一个块，减少停顿
+      const nextChunk = ttsQueueRef.current[0];
+      if (nextChunk && !ttsPrefetchRef.current) {
+        fetchAudio(nextChunk)
+          .then((u) => {
+            if (ttsQueueRef.current[0] === nextChunk) {
+              ttsPrefetchRef.current = {
+                text: nextChunk,
+                voice: ttsVoiceRef.current,
+                rate: ttsRateRef.current,
+                url: u,
+              };
+            } else {
+              URL.revokeObjectURL(u);
+            }
+          })
+          .catch(() => {});
+      }
+    } catch {
+      await playNextChunk(); // 合成失败跳过本块
+    }
+  }, [fetchAudio, stopTts]);
+
+  // 定位"从本页开始"的段落
+  const findStartPara = useCallback((): number => {
+    const container =
+      scrollRef.current ?? document.querySelector("[data-page-scroll]");
+    const cRect = container?.getBoundingClientRect();
+    const threshold = cRect
+      ? cRect.top + cRect.height * 0.15
+      : window.innerHeight * 0.2;
+    const paras = Array.from(
+      document.querySelectorAll<HTMLElement>("p[data-para-index]")
+    );
+    for (const p of paras) {
+      if (p.getBoundingClientRect().top >= threshold) {
+        return Number(p.dataset.paraIndex);
+      }
+    }
+    // 兜底：返回视口内最后一个可见段落
+    for (let i = paras.length - 1; i >= 0; i--) {
+      const r = paras[i].getBoundingClientRect();
+      if (cRect && r.top >= cRect.top && r.bottom <= cRect.bottom) {
+        return Number(paras[i].dataset.paraIndex);
+      }
+    }
+    return 0;
+  }, []);
+
+  // 从指定段落开始播放
+  const startTtsAt = useCallback(
+    (idx: number) => {
+      const para = flatParasRef.current[idx];
+      if (!para) return;
+      ttsPlayingRef.current = true;
+      setTtsState("playing");
+      setTtsParaIndex(idx);
+      ttsQueueRef.current = splitChunks(para.text);
+      playNextChunk();
+    },
+    [playNextChunk]
+  );
+
+  // 从当前可见位置开始朗读
+  const startFromVisible = useCallback(() => {
+    startTtsAt(findStartPara());
+  }, [findStartPara, startTtsAt]);
+
+  // 暂停
+  const pauseTts = useCallback(() => {
+    ttsPlayingRef.current = false;
+    ttsAudioRef.current?.pause();
+    setTtsState("paused");
+  }, []);
+
+  // 继续
+  const resumeTts = useCallback(() => {
+    ttsPlayingRef.current = true;
+    setTtsState("playing");
+    const audio = ttsAudioRef.current;
+    if (audio && audio.src) {
+      audio.play().catch(() => playNextChunk());
+    } else {
+      playNextChunk();
+    }
+  }, [playNextChunk]);
+
+  // 播放/暂停切换
+  const toggleTtsPlay = useCallback(() => {
+    if (ttsState === "playing") pauseTts();
+    else if (ttsState === "paused") resumeTts();
+    else startFromVisible();
+  }, [ttsState, pauseTts, resumeTts, startFromVisible]);
+
+  // 朗读段落变化时：自动翻页 + 滚动到视口中央
+  useEffect(() => {
+    if (ttsState !== "playing" || ttsParaIndex < 0) return;
+    const scrollToPara = () => {
+      document
+        .querySelector<HTMLElement>(`p[data-para-index="${ttsParaIndex}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    };
+    const el = document.querySelector<HTMLElement>(
+      `p[data-para-index="${ttsParaIndex}"]`
+    );
+    if (!el && modeRef.current === "page" && pagesRef.current.length > 0) {
+      // 翻页模式下目标段落在其他页：定位所在页并翻过去
+      const pageOfPara = pagesRef.current.findIndex((pg) => {
+        const starts = pg.paraStarts;
+        return (
+          ttsParaIndex >= starts[0] &&
+          ttsParaIndex <= starts[starts.length - 1]
+        );
+      });
+      if (pageOfPara >= 0) {
+        setPageIndex(pageOfPara);
+        requestAnimationFrame(scrollToPara);
+      }
+      return;
+    }
+    scrollToPara();
+  }, [ttsParaIndex, ttsState]);
+
+  // 卸载时停止朗读
+  useEffect(() => {
+    return () => {
+      ttsPlayingRef.current = false;
+      ttsAudioRef.current?.pause();
+      if (ttsPrefetchRef.current) {
+        URL.revokeObjectURL(ttsPrefetchRef.current.url);
+      }
+    };
+  }, []);
+
   if (loadError) {
     return (
       <div className="min-h-screen flex items-center justify-center px-6">
@@ -401,6 +731,19 @@ export default function Reader({ bookId }: { bookId: string }) {
               </button>
             </div>
 
+            {/* 朗读按钮 */}
+            <button
+              onClick={ttsState !== "idle" ? stopTts : startFromVisible}
+              className={`px-3 h-8 rounded-lg font-sans text-xs transition-colors ${
+                ttsState !== "idle"
+                  ? "bg-accent/10 text-accent border border-accent"
+                  : "border border-accent text-accent hover:bg-accent hover:text-white"
+              }`}
+              title="从本页开始朗读"
+            >
+              {ttsState !== "idle" ? "⏹ 停止" : "🔊 朗读"}
+            </button>
+
             {/* 翻页模式切换 */}
             <button
               onClick={toggleMode}
@@ -472,7 +815,7 @@ export default function Reader({ bookId }: { bookId: string }) {
               onScroll={handleScroll}
               className="flex-1 overflow-y-auto"
             >
-              <div className="max-w-2xl mx-auto px-5 sm:px-8 py-8 sm:py-12">
+              <div className="max-w-2xl mx-auto px-5 sm:px-8 py-8 sm:py-12 pb-28">
                 {detail.chapters.map((ch, ci) => (
                   <section
                     key={ci}
@@ -499,14 +842,24 @@ export default function Reader({ bookId }: { bookId: string }) {
                         .split(/\n+/)
                         .map((p) => p.trim())
                         .filter((p) => p.length > 0)
-                        .map((p, pi) => (
-                          <p
-                            key={pi}
-                            className="text-ink leading-[1.9] mb-4 whitespace-pre-wrap"
-                          >
-                            {p}
-                          </p>
-                        ))}
+                        .map((p, pi) => {
+                          const globalIdx = chapterStarts[ci] + pi;
+                          const active =
+                            ttsState !== "idle" && globalIdx === ttsParaIndex;
+                          return (
+                            <p
+                              key={pi}
+                              data-para-index={globalIdx}
+                              className={`text-ink leading-[1.9] mb-4 whitespace-pre-wrap transition-colors ${
+                                active
+                                  ? "bg-accent/10 rounded-lg px-2 -mx-2"
+                                  : ""
+                              }`}
+                            >
+                              {p}
+                            </p>
+                          );
+                        })}
                     </div>
                   </section>
                 ))}
@@ -514,8 +867,8 @@ export default function Reader({ bookId }: { bookId: string }) {
             </div>
           ) : (
             /* 翻页模式 */
-            <div className="flex-1 overflow-y-auto">
-              <div className="max-w-2xl mx-auto px-5 sm:px-8 py-8 sm:py-12 min-h-full flex flex-col">
+            <div className="flex-1 overflow-y-auto" data-page-scroll>
+              <div className="max-w-2xl mx-auto px-5 sm:px-8 py-8 sm:py-12 min-h-full flex flex-col pb-28">
                 {currentPage ? (
                   <>
                     <h2
@@ -532,14 +885,22 @@ export default function Reader({ bookId }: { bookId: string }) {
                       {detail.chapters[currentPage.chapterIndex]?.title}
                     </h2>
                     <div className="flex-1" style={{ fontSize }}>
-                      {currentPage.paras.map((p, pi) => (
-                        <p
-                          key={pi}
-                          className="text-ink leading-[1.9] mb-4 whitespace-pre-wrap"
-                        >
-                          {p}
-                        </p>
-                      ))}
+                      {currentPage.paras.map((p, pi) => {
+                        const globalIdx = currentPage.paraStarts[pi];
+                        const active =
+                          ttsState !== "idle" && globalIdx === ttsParaIndex;
+                        return (
+                          <p
+                            key={pi}
+                            data-para-index={globalIdx}
+                            className={`text-ink leading-[1.9] mb-4 whitespace-pre-wrap transition-colors ${
+                              active ? "bg-accent/10 rounded-lg px-2 -mx-2" : ""
+                            }`}
+                          >
+                            {p}
+                          </p>
+                        );
+                      })}
                     </div>
                     <div className="mt-8 pt-4 border-t border-paper-200 flex items-center justify-between">
                       <button
@@ -593,6 +954,25 @@ export default function Reader({ bookId }: { bookId: string }) {
           </>
         )}
       </div>
+
+      {/* 朗读控制条 */}
+      {ttsState !== "idle" && (
+        <TTSBar
+          state={ttsState}
+          currentText={ttsCurrentText}
+          progress={
+            ttsParaIndex >= 0
+              ? { current: ttsParaIndex + 1, total: flatParas.length }
+              : null
+          }
+          voice={ttsVoice}
+          onVoiceChange={setTtsVoice}
+          rate={ttsRate}
+          onRateChange={setTtsRate}
+          onTogglePlay={toggleTtsPlay}
+          onStop={stopTts}
+        />
+      )}
     </div>
   );
 }

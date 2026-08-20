@@ -8,6 +8,8 @@ const nextConfig = {
       bodySizeLimit: '200mb',
     },
   },
+  // msedge-tts 使用 ws (WebSocket)，不能被 webpack 打包
+  serverExternalPackages: ['msedge-tts'],
 };
 
 module.exports = nextConfig;
