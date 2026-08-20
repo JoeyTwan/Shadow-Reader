@@ -19,9 +19,9 @@ const VOICE_OPTIONS = [
 ];
 
 const RATE_OPTIONS = [
-  { value: -20, label: "0.8x" },
-  { value: 0, label: "1.0x" },
-  { value: 20, label: "1.2x" },
+  { value: 0.8, label: "0.8x" },
+  { value: 1, label: "1.0x" },
+  { value: 1.2, label: "1.2x" },
 ];
 
 function PlayIcon() {

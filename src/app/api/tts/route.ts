@@ -4,18 +4,14 @@ import { synthesize, VOICES } from "@/lib/tts";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { text, voice, rate } = body;
+    const { text, voice } = body;
 
     if (!text || typeof text !== "string" || text.trim().length === 0) {
       return NextResponse.json({ error: "缺少文本内容" }, { status: 400 });
     }
 
     const voiceKey = voice && VOICES[voice] ? voice : "xiaoxiao";
-    const safeRate =
-      typeof rate === "number" && Number.isFinite(rate)
-        ? Math.max(-100, Math.min(100, rate))
-        : 0;
-    const audioBuffer = await synthesize(text, voiceKey, safeRate);
+    const audioBuffer = await synthesize(text, voiceKey);
 
     return new NextResponse(new Uint8Array(audioBuffer), {
       headers: {

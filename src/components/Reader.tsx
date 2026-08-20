@@ -83,7 +83,8 @@ export default function Reader({ bookId }: { bookId: string }) {
   const [ttsParaIndex, setTtsParaIndex] = useState(-1);
   const [ttsCurrentText, setTtsCurrentText] = useState("");
   const [ttsVoice, setTtsVoice] = useState("xiaoxiao");
-  const [ttsRate, setTtsRate] = useState(0);
+  // 语速：由浏览器 audio.playbackRate 控制（0.8 / 1 / 1.2），切换即时生效
+  const [ttsRate, setTtsRate] = useState(1);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const chapterRefs = useRef<(HTMLElement | null)[]>([]);
@@ -96,7 +97,7 @@ export default function Reader({ bookId }: { bookId: string }) {
 
   // TTS 朗读引擎 refs（避免闭包过期）
   const ttsVoiceRef = useRef("xiaoxiao");
-  const ttsRateRef = useRef(0);
+  const ttsRateRef = useRef(1);
   const ttsPlayingRef = useRef(false);
   const ttsQueueRef = useRef<string[]>([]);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -104,7 +105,6 @@ export default function Reader({ bookId }: { bookId: string }) {
   const ttsPrefetchRef = useRef<{
     text: string;
     voice: string;
-    rate: number;
     url: string;
   } | null>(null);
   const flatParasRef = useRef<FlatPara[]>([]);
@@ -437,7 +437,7 @@ export default function Reader({ bookId }: { bookId: string }) {
 
   // ============ TTS 朗读引擎 ============
 
-  // 请求合成一段音频
+  // 请求合成一段音频（自然语速合成，变速由前端 playbackRate 控制）
   const fetchAudio = useCallback(async (text: string): Promise<string> => {
     const res = await fetch("/api/tts", {
       method: "POST",
@@ -445,7 +445,6 @@ export default function Reader({ bookId }: { bookId: string }) {
       body: JSON.stringify({
         text,
         voice: ttsVoiceRef.current,
-        rate: ttsRateRef.current,
       }),
     });
     if (!res.ok) throw new Error(`TTS ${res.status}`);
@@ -490,12 +489,11 @@ export default function Reader({ bookId }: { bookId: string }) {
     setTtsCurrentText(chunk);
     try {
       let url: string | null = null;
-      // 命中预取（同一文本 + 同一声音 + 同一语速）
+      // 命中预取（同一文本 + 同一声音；语速由 playbackRate 控制，不影响命中）
       if (
         ttsPrefetchRef.current &&
         ttsPrefetchRef.current.text === chunk &&
-        ttsPrefetchRef.current.voice === ttsVoiceRef.current &&
-        ttsPrefetchRef.current.rate === ttsRateRef.current
+        ttsPrefetchRef.current.voice === ttsVoiceRef.current
       ) {
         url = ttsPrefetchRef.current.url;
         ttsPrefetchRef.current = null;
@@ -507,6 +505,8 @@ export default function Reader({ bookId }: { bookId: string }) {
         ttsAudioRef.current = audio;
       }
       audio.src = url;
+      // 应用当前语速（切换语速即时生效，不需要重新合成）
+      audio.playbackRate = ttsRateRef.current;
       audio.onended = () => {
         URL.revokeObjectURL(url);
         playNextChunk();
@@ -525,7 +525,6 @@ export default function Reader({ bookId }: { bookId: string }) {
               ttsPrefetchRef.current = {
                 text: nextChunk,
                 voice: ttsVoiceRef.current,
-                rate: ttsRateRef.current,
                 url: u,
               };
             } else {
@@ -602,6 +601,16 @@ export default function Reader({ bookId }: { bookId: string }) {
       playNextChunk();
     }
   }, [playNextChunk]);
+
+  // 切换语速：立即应用到正在播放的音频，无需等当前段播完
+  const changeRate = useCallback((r: number) => {
+    setTtsRate(r);
+    ttsRateRef.current = r;
+    const audio = ttsAudioRef.current;
+    if (audio && audio.src && !audio.paused) {
+      audio.playbackRate = r;
+    }
+  }, []);
 
   // 播放/暂停切换
   const toggleTtsPlay = useCallback(() => {
@@ -968,7 +977,7 @@ export default function Reader({ bookId }: { bookId: string }) {
           voice={ttsVoice}
           onVoiceChange={setTtsVoice}
           rate={ttsRate}
-          onRateChange={setTtsRate}
+          onRateChange={changeRate}
           onTogglePlay={toggleTtsPlay}
           onStop={stopTts}
         />

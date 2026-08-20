@@ -32,10 +32,8 @@ const MAX_TEXT_LENGTH = 3000;
 const CACHE_MAX_FILES = 300;
 const CACHE_CLEAN_BATCH = 100;
 
-function getCacheKey(voice: string, rate: number, text: string): string {
-  return createHash("md5")
-    .update(`${voice}:${rate}:${text}`)
-    .digest("hex");
+function getCacheKey(voice: string, text: string): string {
+  return createHash("md5").update(`${voice}:${text}`).digest("hex");
 }
 
 // 缓存文件数量超限时，按修改时间清理最旧的一批
@@ -63,19 +61,18 @@ async function cleanCacheIfNeeded(): Promise<void> {
 
 /**
  * 使用 Edge-TTS 将文本合成为 MP3 音频。
- * 带 MD5 缓存：同一段文字 + 同一声音 + 同一语速不重复合成。
+ * 固定以自然语速合成，带 MD5 缓存：同一段文字 + 同一声音不重复合成。
+ * 语速统一由前端 audio.playbackRate 控制（切换即时生效、速率稳定）。
  */
 export async function synthesize(
   text: string,
-  voiceKey: string,
-  rate: number = 0
+  voiceKey: string
 ): Promise<Buffer> {
   if (!text || text.trim().length === 0) {
     throw new Error("文本为空");
   }
 
   const voiceShortName = VOICES[voiceKey] || VOICES.xiaoxiao;
-  const safeRate = Math.max(-100, Math.min(100, rate || 0));
 
   // 截断超长文本（SSML 限制）
   const safeText =
@@ -84,7 +81,7 @@ export async function synthesize(
       : text;
 
   // 检查缓存
-  const cacheKey = getCacheKey(voiceKey, safeRate, safeText);
+  const cacheKey = getCacheKey(voiceKey, safeText);
   const cachePath = path.join(CACHE_DIR, `${cacheKey}.mp3`);
   try {
     const cached = await readFile(cachePath);
@@ -100,7 +97,7 @@ export async function synthesize(
     OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3
   );
 
-  const { audioStream } = tts.toStream(safeText, { rate: safeRate });
+  const { audioStream } = tts.toStream(safeText);
   const chunks: Buffer[] = [];
 
   for await (const chunk of audioStream) {
