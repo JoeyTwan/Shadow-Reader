@@ -74,9 +74,10 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("[对话] 请求失败:", error);
-    return NextResponse.json(
-      { error: "对话失败，请检查 DeepSeek API Key 是否配置正确" },
-      { status: 500 }
-    );
+    const msg = error instanceof Error ? error.message : "";
+    const friendly = msg.includes("没有返回内容")
+      ? msg
+      : "对话失败，请稍后重试";
+    return NextResponse.json({ error: friendly }, { status: 500 });
   }
 }
