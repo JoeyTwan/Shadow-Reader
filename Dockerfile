@@ -12,6 +12,8 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+# 限制 Node 堆内存：服务器只有 1.6GB 内存，无限堆会把整机拖入内存耗尽
+ENV NODE_OPTIONS=--max-old-space-size=768
 # 构建时无需 API Key（运行时读取）
 RUN npm run build
 

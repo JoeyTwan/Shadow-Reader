@@ -90,6 +90,7 @@ ${sectionsText}`;
 
   return chat(messages, {
     temperature: 0.7,
-    maxTokens: 1024,
+    // 1024 只够写约 700 字中文，讨论稍展开就被截断；提到 4096 可写约 2500 字
+    maxTokens: 4096,
   });
 }
