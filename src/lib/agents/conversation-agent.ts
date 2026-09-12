@@ -10,7 +10,7 @@
  * - 认同的地方坦诚认同，不认同的地方直接指出
  */
 
-import { chat, type ChatMessage } from "@/lib/ai/deepseek";
+import { chat, chatStream, type ChatMessage } from "@/lib/ai/deepseek";
 
 export interface ConversationMessage {
   role: "user" | "assistant";
@@ -48,17 +48,13 @@ export interface AuthorContext {
 }
 
 /**
- * 以作者视角回应用户
- *
- * @param userMessage 用户的消息
- * @param context 书籍上下文（书名 + 作者名 + 相关片段）
- * @param history 最近的对话历史（不含本次用户消息）
+ * 组装请求 DeepSeek 的完整消息数组（作者身份 + 书籍片段 + 历史对话）
  */
-export async function converseAsAuthor(
+function buildAuthorMessages(
   userMessage: string,
   context: AuthorContext,
-  history: ConversationMessage[] = []
-): Promise<string> {
+  history: ConversationMessage[]
+): ChatMessage[] {
   const sectionsText = context.relevantSections.length
     ? context.relevantSections
         .map((s, i) => `【书中片段 ${i + 1}】\n${s}`)
@@ -82,15 +78,47 @@ ${sectionsText}`;
     content: m.content,
   }));
 
-  const messages: ChatMessage[] = [
+  return [
     { role: "system", content: systemPrompt },
     ...historyMessages,
     { role: "user", content: userMessage },
   ];
+}
 
-  return chat(messages, {
+// 对话输出上限：4096 token 约等于 2500 字中文，正常讨论完全够用
+const CONVERSATION_MAX_TOKENS = 4096;
+
+/**
+ * 以作者视角回应用户
+ *
+ * @param userMessage 用户的消息
+ * @param context 书籍上下文（书名 + 作者名 + 相关片段）
+ * @param history 最近的对话历史（不含本次用户消息）
+ */
+export async function converseAsAuthor(
+  userMessage: string,
+  context: AuthorContext,
+  history: ConversationMessage[] = []
+): Promise<string> {
+  return chat(buildAuthorMessages(userMessage, context, history), {
     temperature: 0.7,
-    // 1024 只够写约 700 字中文，讨论稍展开就被截断；提到 4096 可写约 2500 字
-    maxTokens: 4096,
+    maxTokens: CONVERSATION_MAX_TOKENS,
+  });
+}
+
+/**
+ * 以作者视角回应用户（流式版本，逐块产出内容）
+ *
+ * 用于前端打字机效果：模型每生成一段就立即推给浏览器，
+ * 用户不用等整段回答生成完才看到内容。
+ */
+export async function* converseAsAuthorStream(
+  userMessage: string,
+  context: AuthorContext,
+  history: ConversationMessage[] = []
+): AsyncGenerator<string> {
+  yield* chatStream(buildAuthorMessages(userMessage, context, history), {
+    temperature: 0.7,
+    maxTokens: CONVERSATION_MAX_TOKENS,
   });
 }

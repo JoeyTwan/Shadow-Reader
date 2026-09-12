@@ -74,6 +74,10 @@ export default function ChatPanel({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  // 正在流式生成中的回复内容（打字机效果）
+  const [streamingText, setStreamingText] = useState("");
+  // 服务端准备阶段的提示（检索书籍片段 / 模型思考中）
+  const [statusText, setStatusText] = useState("");
   const [loadError, setLoadError] = useState("");
 
   // 语音输入状态
@@ -124,6 +128,13 @@ export default function ChatPanel({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, insight]);
 
+  // 流式输出期间持续跟随底部（内容增长频繁，用 auto 避免动画卡顿）
+  useEffect(() => {
+    if (streamingText) {
+      bottomRef.current?.scrollIntoView({ behavior: "auto" });
+    }
+  }, [streamingText]);
+
   // 面板打开时自动聚焦输入框
   useEffect(() => {
     const timer = setTimeout(() => inputRef.current?.focus(), 100);
@@ -156,9 +167,11 @@ export default function ChatPanel({
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setSending(true);
+    setStreamingText("");
+    setStatusText("");
 
     try {
-      const res = await fetch("/api/chat", {
+      const res = await fetch("/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bookId, message: content }),
@@ -168,17 +181,71 @@ export default function ChatPanel({
         const err = await res.json();
         throw new Error(err.error || "发送失败");
       }
+      if (!res.body) {
+        throw new Error("当前浏览器不支持流式响应");
+      }
 
-      const data = await res.json();
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: data.reply,
-          timestamp: new Date().toISOString(),
-        },
-      ]);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let replyText = "";
+      let streamError = "";
+
+      // 逐块读取，边收边渲染（打字机效果）
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE 事件以空行分隔
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+
+        for (const event of events) {
+          const line = event.trim();
+          if (!line.startsWith("data:")) continue;
+
+          let payload: { type?: string; text?: string; message?: string };
+          try {
+            payload = JSON.parse(line.slice(5).trim());
+          } catch {
+            continue;
+          }
+
+          if (payload.type === "delta" && payload.text) {
+            replyText += payload.text;
+            setStatusText("");
+            setStreamingText(replyText);
+          } else if (payload.type === "status" && payload.text) {
+            // 首个 delta 到达前展示阶段提示，让等待有反馈
+            if (!replyText) setStatusText(payload.text);
+          } else if (payload.type === "error") {
+            streamError = payload.message || "对话失败，请稍后重试";
+          }
+        }
+      }
+
+      // 流结束：把完整回复落到消息列表，清空流式缓冲
+      if (replyText.trim()) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: streamError
+              ? `${replyText}\n\n（对话中断：${streamError}）`
+              : replyText,
+            timestamp: new Date().toISOString(),
+          },
+        ]);
+        setStreamingText("");
+      } else if (streamError) {
+        throw new Error(streamError);
+      } else {
+        throw new Error("AI 没有返回内容，请重新发送一次");
+      }
     } catch (e) {
+      setStreamingText("");
       setMessages((prev) => [
         ...prev,
         {
@@ -189,6 +256,7 @@ export default function ChatPanel({
       ]);
     } finally {
       setSending(false);
+      setStatusText("");
     }
   };
 
@@ -376,19 +444,43 @@ export default function ChatPanel({
                   </div>
                 )
               )}
-              {sending && (
+              {/* 流式生成中的回复（打字机效果） */}
+              {sending && streamingText && (
+                <div className="flex justify-start">
+                  <div className="max-w-[92%] bg-white border border-paper-200 rounded-2xl rounded-bl-sm px-4 py-2.5">
+                    <p className="text-[11px] text-ink-muted font-sans mb-1">
+                      {authorLabel}
+                    </p>
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap text-ink">
+                      {streamingText}
+                      <span
+                        className="inline-block w-[2px] h-[1em] align-[-0.15em] ml-0.5 bg-ink-muted animate-pulse"
+                        aria-hidden="true"
+                      />
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* 等待首段内容返回 */}
+              {sending && !streamingText && (
                 <div className="flex justify-start">
                   <div className="bg-white border border-paper-200 rounded-2xl rounded-bl-sm px-5 py-3.5">
-                    <div className="flex gap-1.5">
-                      <span className="w-1.5 h-1.5 bg-ink-muted rounded-full animate-bounce" />
-                      <span
-                        className="w-1.5 h-1.5 bg-ink-muted rounded-full animate-bounce"
-                        style={{ animationDelay: "0.15s" }}
-                      />
-                      <span
-                        className="w-1.5 h-1.5 bg-ink-muted rounded-full animate-bounce"
-                        style={{ animationDelay: "0.3s" }}
-                      />
+                    <div className="flex items-center gap-3">
+                      <div className="flex gap-1.5">
+                        <span className="w-1.5 h-1.5 bg-ink-muted rounded-full animate-bounce" />
+                        <span
+                          className="w-1.5 h-1.5 bg-ink-muted rounded-full animate-bounce"
+                          style={{ animationDelay: "0.15s" }}
+                        />
+                        <span
+                          className="w-1.5 h-1.5 bg-ink-muted rounded-full animate-bounce"
+                          style={{ animationDelay: "0.3s" }}
+                        />
+                      </div>
+                      <span className="text-xs text-ink-muted font-sans">
+                        {statusText || "正在准备回答…"}
+                      </span>
                     </div>
                   </div>
                 </div>

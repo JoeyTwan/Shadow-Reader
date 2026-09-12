@@ -135,6 +135,11 @@ export async function chat(
 
 /**
  * 发送流式对话请求到 DeepSeek
+ *
+ * 与 chat() 保持一致的两层容错：
+ * 1. 完全没有产出内容时自动重试（已产出则不重试，避免内容重复）
+ * 2. 撞到长度上限（finish_reason 为 "length"）时自动续写，保证内容完整
+ * 3. 传输中途断开时，返回已经生成的部分，避免用户白等
  */
 export async function* chatStream(
   messages: ChatMessage[],
@@ -142,18 +147,80 @@ export async function* chatStream(
 ): AsyncGenerator<string> {
   const c = getClient();
 
-  const stream = await c.chat.completions.create({
+  const baseParams = {
     model: options.model || DEFAULT_MODEL,
-    messages,
     temperature: options.temperature ?? 0.7,
     max_tokens: options.maxTokens,
-    stream: true,
-  });
+    stream: true as const,
+  };
 
-  for await (const chunk of stream) {
-    const delta = chunk.choices[0]?.delta?.content;
-    if (delta) {
-      yield delta;
+  const MAX_EMPTY_RETRIES = 2;
+  const MAX_CONTINUATIONS = 2;
+
+  let conversation: ChatMessage[] = [...messages];
+  let fullText = "";
+
+  for (let step = 0; step <= MAX_CONTINUATIONS; step++) {
+    let produced = false;
+    let finishReason: string | null | undefined;
+
+    for (let attempt = 1; attempt <= MAX_EMPTY_RETRIES; attempt++) {
+      try {
+        const stream = await c.chat.completions.create({
+          ...baseParams,
+          messages: conversation,
+        });
+
+        for await (const chunk of stream) {
+          const choice = chunk.choices[0];
+          if (choice?.finish_reason) {
+            finishReason = choice.finish_reason;
+          }
+          const delta = choice?.delta?.content;
+          if (delta) {
+            produced = true;
+            fullText += delta;
+            yield delta;
+          }
+        }
+      } catch (error) {
+        // 传输中断：已经产出的内容照常返回，避免用户白等
+        if (produced) {
+          console.warn("[DeepSeek] 流式传输中断，返回已生成内容:", error);
+          return;
+        }
+        throw error;
+      }
+
+      if (produced) break;
+
+      console.warn(
+        `[DeepSeek] 流式第 ${attempt} 次未产出任何内容（finish_reason: ${finishReason ?? "unknown"}）`
+      );
     }
+
+    if (!produced) {
+      if (!fullText) {
+        throw new Error("AI 没有返回内容，请重新发送一次");
+      }
+      return;
+    }
+
+    if (finishReason !== "length") return;
+    if (step === MAX_CONTINUATIONS) {
+      console.warn("[DeepSeek] 已达最大续写次数，回复仍可能不完整");
+      return;
+    }
+
+    console.warn(`[DeepSeek] 流式回复被截断，自动续写第 ${step + 1} 次`);
+    conversation = [
+      ...conversation,
+      { role: "assistant", content: fullText },
+      {
+        role: "user",
+        content:
+          "请紧接着上文继续写完，不要重复已经说过的内容，也不要在开头添加任何说明或过渡语。",
+      },
+    ];
   }
 }
